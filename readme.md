@@ -1,23 +1,74 @@
-Porject name: Websocket chatbox
+Here’s how the `README.md` should be formatted for GitHub:
 
-+Introduction:
-real time chat between multiple users
+````markdown
+# Websocket Chatbox
 
-+Features:
-real-time messaging, secure connection, user authentication, rate limiting, connection handling
+## Introduction
 
-+User Guide:
-.env file will be included via canvas submission in zip file
-git clone https://github.com/nguyenvubach/CPSC-455.git
-cd CPSC-455
-cd backend
-install using the npm package manager:
-npm i
-for backend:
+A real-time chat application that allows multiple users to communicate instantly.
+
+---
+
+## Features
+
+- Real-time Messaging
+- Secure Connection
+- User Authentication
+- Rate Limiting
+- Connection Handling
+
+---
+
+## User Guide
+
+### Prerequisites
+
+- `.env` file will be provided via Canvas submission in a zip file.
+- Ensure that you have Node.js and npm installed.
+
+### Installation
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/nguyenvubach/CPSC-455.git
+   ```
+````
+
+2. Navigate to the project directory:
+   ```bash
+   cd CPSC-455
+   cd backend
+   ```
+3. Install dependencies using npm:
+   ```bash
+   npm i
+   ```
+
+### Running the Application
+
+**Backend:**
+
+```bash
 npm start
-for front end, install “live server” from git hub extension
-right click the .html file and press Open with Live Server (Alt+L Alt+O)
-alt: if you have a problem with port connection, just change your port to something else, ex: 5001 instead of 5000
+```
 
-Technologies:
-JS, mongodb, html, css, dom elements
+**Frontend:**
+
+- Install the **Live Server** extension from GitHub.
+- Right-click the `.html` file and select **Open with Live Server** (`Alt+L Alt+O`).
+
+**Alternative:**  
+If you encounter port connection issues, change the port (e.g., use `5001` instead of `5000`).
+
+---
+
+## Technologies
+
+- JavaScript (JS)
+- MongoDB
+- HTML / CSS
+- DOM Elements
+
+```
+AI uses for readme.md and changelog.md format
+```
