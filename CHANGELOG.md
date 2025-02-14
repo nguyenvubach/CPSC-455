@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [2.2-beta] - 2025-02-14
 
-**Commit:** `db9366050404a945cd1e006d8ba6189f5ca065a1`
+**Commit:** `b29aa9fde09774e2383b80408af017e668a607ad`
 
 ### Changes:
 
