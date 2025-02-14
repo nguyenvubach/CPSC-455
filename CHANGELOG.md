@@ -1,3 +1,6 @@
+##2.1 beta (02/12/2025)
+update readme file
+
 ##2.0 beta (02/12/2025)
 fully functioning app released
 added readme, changelog
