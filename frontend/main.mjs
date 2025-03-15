@@ -1,10 +1,10 @@
 import {app, BrowserWindow} from 'electron'
-import {fileURLTopPath} from 'url'
+import {fileURLToPath} from 'url'
 import path from 'path'
 
 
 //Convert the file URL to a file path
-const __filename = fileURLTopPath(import.meta.url);
+const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename)
 
 let mainWidow;

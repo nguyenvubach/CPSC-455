@@ -1,16 +1,22 @@
 import { WebSocketServer } from 'ws';
+import {readFileSync, writeFileSync} from 'fs'
 import bcrypt from 'bcrypt';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import User from './model/User.js';
+import { fileURLToPath } from 'url';
+import path from 'path';
+import { createServer } from 'https';
 
 dotenv.config();
 
 const PORT = 5000;
 
+const server =  createServer()
 // WebSocket server setup
 // const wss = new WebSocketServer({ host: '0.0.0.0',port: PORT });
-const wss = new WebSocketServer({ port: PORT });
+const wss = new WebSocketServer({server});
+
 
 // Stored connected clients and chatrooms
 const connectedClients = new Map(); // Map<username, WebSocket>
@@ -89,7 +95,7 @@ wss.on('connection', (ws, req) => {
     } else {
       data = JSON.parse(message);
     }
-    console.log('Received data:', data);
+    console.log(`Received message: from ${clientIp}`, data);
 
     if (data.type === 'login') {
       if (await authenticate(data.username, data.password)) {
@@ -161,7 +167,7 @@ wss.on('connection', (ws, req) => {
         })
         chatHistory.set(chatroomName, history);
 
-        //Sned the message to the recipient
+        //Send the message to the recipient
         const recipientWs = connectedClients.get(data.recipient)
         if (recipientWs){
           recipientWs.send(
@@ -196,3 +202,8 @@ wss.on('connection', (ws, req) => {
     console.log('Client disconnected')
   });
 });
+
+
+server.listen(PORT, ()=> {
+  console.log(`WebSocket server running wss://localhost:${PORT}`)
+})
