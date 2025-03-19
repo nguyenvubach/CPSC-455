@@ -107,8 +107,17 @@ function initializeWebSocket() {
     }
   };
 
-  //Update the user list in the sidebar
+  
+
+  socket.onclose = () => {
+    console.log('WebSocket connection closed');
+    alert('Connection lost. Please refresh the page.');
+  };
+}
+
+//Update the user list in the sidebar
   function updateUserList(users) {
+    console.log('users', users)
     userListDiv.innerHTML = ''; //reset/clear the current list
     users.forEach((user)=> {
       if (user !== currentUser) {
@@ -139,13 +148,6 @@ function initializeWebSocket() {
     )
 
   }
-
-  socket.onclose = () => {
-    console.log('WebSocket connection closed');
-    alert('Connection lost. Please refresh the page.');
-  };
-}
-
 // Send message
 sendBtn.addEventListener('click', () => {
   const message = messageBox.value; // Ensure 'messageBox' is correctly defined

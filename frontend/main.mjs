@@ -7,29 +7,34 @@ import path from 'path'
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename)
 
-let mainWidow;
+let mainWindow;
 
 function createWindow() {
     // Create the browser windows
-    mainWidow = new BrowserWindow({
+    mainWindow = new BrowserWindow({
         width:800,
         height:600,
         webPreferences: {
-            preload: path.join(__dirname, 'preload.js'), //load the preload script
+           // preload: path.join(__dirname, 'preload.js'), //load the preload script
             nodeIntegration: false, //Disable nodeInntegration for security
             contextIsolation: true, //Enable context isolation for security
         }
     });
 
+    //ignore certificate errors (Development environment only)
+    mainWindow.webContents.session.setCertificateVerifyProc((request, callback)=> {
+        callback(0); //Bypass cert validation
+    })
+
     //Load index.html file
-    mainWidow.loadFile(path.join(__dirname, 'index.html'));
+    mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
     // Open the DevTool (optional)
-    //mainWondow.webContents.openDevTools();
+    mainWindow.webContents.openDevTools();
 
     // Emitted when the window is closed
-    mainWidow.on('close', ()=> {
-        mainWidow = null
+    mainWindow.on('close', ()=> {
+        mainWindow = null
     })
 }
 

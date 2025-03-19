@@ -12,7 +12,10 @@ dotenv.config();
 
 const PORT = 5000;
 
-const server =  createServer()
+const server =  createServer({
+  cert:readFileSync('../ssl/cert.pem'),
+  key:readFileSync('../ssl/key.pem')
+})
 // WebSocket server setup
 // const wss = new WebSocketServer({ host: '0.0.0.0',port: PORT });
 const wss = new WebSocketServer({server});
@@ -57,6 +60,7 @@ function broadcastActiveUsers() {
   const userList = Array.from(activeUsers);
   wss.clients.forEach((client) => {
     if (client.readyState === client.OPEN) {
+      console.log('user_list',userList)
       client.send(JSON.stringify({type: 'user_list', users: userList}))
     }
   })
@@ -100,9 +104,11 @@ wss.on('connection', (ws, req) => {
     if (data.type === 'login') {
       if (await authenticate(data.username, data.password)) {
         connectedClients.set(data.username, ws);
+        activeUsers.add(data.username)
         ws.send(
           JSON.stringify({ type: 'login_successfull', username: data.username })
         );
+        broadcastActiveUsers()
       } else {
         ws.send(
           JSON.stringify({
