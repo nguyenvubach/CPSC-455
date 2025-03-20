@@ -12,10 +12,16 @@ dotenv.config();
 
 const PORT = 5000;
 
+//Load SSL certificates
 const server =  createServer({
   cert:readFileSync('../ssl/cert.pem'),
   key:readFileSync('../ssl/key.pem')
 })
+
+//Convert the URL to a file path
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
 // WebSocket server setup
 // const wss = new WebSocketServer({ host: '0.0.0.0',port: PORT });
 const wss = new WebSocketServer({server});
@@ -70,6 +76,24 @@ function broadcastActiveUsers() {
 function getChatroomName(user1, user2){
   const users = [user1, user2].sort(); //Sort usernames alphabetiaclly
   return users.join('-')
+}
+
+//Log chats to .txt file after disconnection
+function logChatToFile(chatroomName, messages){
+  const logFilePath = path.join(
+    __dirname,
+    'chat_logs',
+    `${chatroomName}_${Date.now()}.txt`
+  );
+  const logContent = messages?.map((msg)=> {
+    if (msg.file) {
+      return `${msg.from} sent a file at ${new Date().toISOString()}`
+    } else {
+      return `${msg.from}: ${msg.message} (${new Date().toISOString()})`
+    }
+  }).join('\n')
+  writeFileSync(logFilePath, logContent, 'utf8');
+  console.log(`Chat logged to ${logFilePath}}`)
 }
 
 // Handle WebSocket connections
@@ -139,12 +163,42 @@ wss.on('connection', (ws, req) => {
         const chatroomName = getChatroomName(data.username, data.recipient)
         const history = chatHistory.get(chatroomName) || [];
         ws.send(JSON.stringify({
-          type: 'chat__history',
+          type: 'chat_history',
           chatroomName,
           messages:history,
         }))
 
-    } else if (data.type === 'message') {
+    } else if (data.type === 'file') {
+      if (!connectedClients.has(data.username)) {
+        ws.send(JSON.stringify({type: 'error', message:'User not logged in'}));
+        return
+      }
+
+      //Store the file in the chat history 
+const chatroomName = getChatroomName(data.username, data.recipient);
+const history = chatHistory.get(chatroomName) || [];
+history.push({
+  from: data.username,
+  message: null,
+  file: data.file,
+  iv: data.iv,
+  mimeType: data.mimeType
+})
+chatHistory.set(chatroomName, history);
+
+// Send the file to the recipient
+const reciepientWs = connectedClients.get(data.recipient)
+if (reciepientWs) {
+  JSON.stringify({
+    type: 'file',
+    file: data.file,
+    iv: data.iv,
+    mimeType: data.mimeType
+  })
+}
+    }
+    
+    else if (data.type === 'message') {
       if (!connectedClients.has(data.username)) {
         ws.send(
           JSON.stringify({ type: 'error', message: 'User not logged in' })
@@ -169,7 +223,8 @@ wss.on('connection', (ws, req) => {
         const history = chatHistory.get(chatroomName) || [];
         history.push({
           from: data.username, 
-          message:data.message
+          message:data.message,
+          file: null,
         })
         chatHistory.set(chatroomName, history);
 
@@ -201,6 +256,14 @@ wss.on('connection', (ws, req) => {
       connectedClients.delete(ws.username)
       activeUsers.delete(ws.username);
       broadcastActiveUsers() //Broadcast updated user list
+      console.log('chat history',chatHistory)
+      //Log chats for all chatrooms involving the disconnected user
+      chatHistory.forEach((messages, chatroomName) => {
+        if (chatroomName.includes(ws.username)) {
+          logChatToFile(chatroomName, messages);
+         
+        }
+      })
     }
 
     // Clear heartbeat interval

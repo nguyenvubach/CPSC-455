@@ -1,3 +1,5 @@
+
+
 let socket;
 let currentUser;
 let currentRecipient
@@ -19,6 +21,71 @@ const messagesDiv = document.getElementById('messages');
 const authErrorDiv = document.getElementById('auth-error');
 const chatroomErrorDiv = document.getElementById('chatroom-error');
 const messageBox = document.getElementById('message-box');
+const fileInput = document.getElementById('file-input');
+
+const secretKey = new Uint8Array(32) 
+
+// Encrypt file
+async function encryptFile(file, secretKey){
+  const iv = crypto.getRandomValues(new Uint8Array(16)) //innitialization vector
+  const algorithm = {name:'AES-CBC', iv};
+  const key = await crypto.subtle.importKey(
+    'raw',
+    secretKey,
+    algorithm,
+    false,
+    ['encrypt']
+  );
+const encrypted = await crypto.subtle.encrypt(algorithm, key, file);
+return {iv, encryptedData: new Uint8Array(encrypted)}
+}
+// Decrypt file
+async function decryptFile(encryptedData,iv, secretKey){
+  const algorithm = {name:'AES-CBC', iv};
+  const key = await crypto.subtle.importKey(
+    'raw',
+    secretKey,
+    algorithm,
+    false,
+    ['decrypt']
+  );
+const decrypted = await crypto.subtle.decrypt(algorithm, key, encryptedData);
+return new Uint8Array(decrypted)
+}
+
+// display a file (e.g, image) in the chat
+function displayFile(fileData, from, mimeType = 'application/octet-stream'){
+  const fileBlob = new Blob([fileData], {type : mimeType});
+  const fileUrl = URL.createObjectURL(fileBlob);
+
+  const fileElement = document.createElement('div');
+  fileElement.className = 'message';
+  console.log('blob', fileBlob.type)
+
+  if (fileBlob.type.startsWith('image/')) {
+    //display image
+    const img = document.createElement('img');
+    img.src = fileUrl;
+    img.style.maxWidth = '100px';
+    img.style.maxHeight = '100px';
+    img.onload =()=> URL.revokeObjectURL(fileUrl); //clean up object URL after the link is clicked
+    fileElement.appendChild(img)
+  } else {
+    //display a download link for non-image file
+    const link = document.createElement('a');
+    link.href = fileUrl
+    link.download = `file_${Date.now()}`;
+    link.textContent = `Download file`
+    fileElement.appendChild(link);
+  }
+
+  const senderElement = document.createElement('div');
+  senderElement.textContent = `${from}:`;
+  fileElement.prepend(senderElement)
+
+  messagesDiv.appendChild(fileElement);
+  messagesDiv.scrollTop = messagesDiv.scrollHeight; //Auto-scroll to the bottom of the chat
+}
 
 
 
@@ -27,7 +94,7 @@ function displayMessages(messages) {
   messages.forEach(msg => {
     if (msg.file) {
       //Display file
-    // displayFile(msg.file, msg.from, msg.mimeType)
+     displayFile(msg.file, msg.from, msg.mimeType)
     }
     else {
       //Display text message
@@ -92,7 +159,32 @@ function initializeWebSocket() {
      if (currentRecipient === data.from) {
       displayMessages(history)
      }
-    } else if (data.type === 'user_list'){
+    } else if(data.type === 'file'){
+      //Decrpyt the file
+      const decryptedFile = await decryptFile(
+        new Uint8Array(data.file),
+        new Uint8Array(data.iv),
+        secretKey
+      );
+
+      //Add the file to the chat history
+      const chatroomName = getChatroomName(currentUser, data.from);
+      const history = chatHistory.get(chatroomName) || []
+      history.push({
+       from: data.from,
+       message:null,
+       file:decryptedFile,
+       mimeType:data.mimeType,
+      })
+      chatHistory.set(chatroomName, history)
+
+      //display the file when/if the reciepient is currently selected
+      if (currentRecipient === data.from) {
+        displayMessages(history);
+      }
+
+    }
+    else if (data.type === 'user_list'){
         updateUserList(data.users) //update the user list
     }
     
@@ -179,6 +271,43 @@ sendBtn.addEventListener('click', () => {
 });
 
 
+//send file
+
+fileInput.addEventListener('change', async (event)=> {
+  const file = event.target.files[0];
+  if (file && socket && currentRecipient) {
+    const fileBuffer = await file.arrayBuffer();
+    const {iv, encryptedData} = await encryptFile(fileBuffer, secretKey);
+
+    //Add the file to the chat history for the sender
+    const chatroomName = getChatroomName(currentUser, currentRecipient)
+    const history = chatHistory.get(chatroomName) || []
+    history.push({
+      from: currentUser,
+      message: null,
+      file: fileBuffer, 
+      mimeType:file.type,
+    })
+    chatHistory.set(chatroomName, history);
+
+    //Display the updated messages 
+    displayMessages(history);
+
+    //send the encrypted file to the backend
+    socket.send(
+      JSON.stringify({
+        type:'file',
+        username: currentUser,
+        recipient: currentRecipient,
+        iv: Array.from(iv),
+        file: Array.from(encryptedData),
+        mimeType: file.type
+      })
+    );
+  } else {
+    alert('Please select a user to send a file.')
+  }
+})
 
 // Login
 loginBtn.addEventListener('click', () => {
