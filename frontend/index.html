@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"> 
   <title>Chat Application</title> 
 
+  <script src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script type="text/javascript" src="dompurify/purify.js"></script>
   <style> 
     body { 
       font-family: Arial, sans-serif; 
@@ -140,7 +143,36 @@
     #message-input button:hover { 
       background-color: #2980b9; 
     } 
+
+    /* Emoji picker */
+    #emoji-picker {
+      position: absolute;
+      bottom: 60px;
+      right: 10px;
+      z-index: 1000;
+      display: none; /* Hidden by default */
+    }
+
+    #formatting-buttons {
+      display: flex;
+      gap: 5px;
+      margin-bottom: 10px;
+    }
+
+    #formatting-buttons button {
+      padding: 5px 10px;
+      border: none;
+      background-color: #3498db;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    #formatting-buttons button:hover {
+      background-color: #2980b9;
+    }
   </style> 
+
 </head> 
 <body> 
   <!-- Login/Register Section --> 
@@ -165,6 +197,10 @@
     <div id="chat-window"> 
       <div id="messages"></div> 
       <div id="message-input"> 
+        <button id="bold-btn" title="Bold">B</button>
+        <button id="italic-btn" title="Italic">I</button>
+        <button id="emoji-btn" title="Insert Emoji">😊</button>
+
         <input type="text" id="message-box" placeholder="Type a message..."> 
         <button id="send-btn">Send</button>
         <input type="file" id="file-input" style="display: none;">
@@ -173,6 +209,8 @@
     </div> 
   </div> 
  
+  <!-- Emoji Picker -->
+   <div id="emoji-picker"></div>
   <script src="app.js"></script> 
 </body> 
 </html>

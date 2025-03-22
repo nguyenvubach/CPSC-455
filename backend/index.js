@@ -7,6 +7,8 @@ import User from './model/User.js';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { createServer } from 'https';
+import {JSDOM} from 'jsdom'
+import createDOMPurify from 'dompurify'
 
 dotenv.config();
 
@@ -27,6 +29,7 @@ const __dirname = path.dirname(__filename)
 const wss = new WebSocketServer({server});
 
 
+
 // Stored connected clients and chatrooms
 const connectedClients = new Map(); // Map<username, WebSocket>
 const activeUsers = new Set() //Set of active users
@@ -38,6 +41,10 @@ const userMessageCounts = new Map();
 
 // Heartbeat interval (in milliseconds)
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+
+// Innitialize DOMPurify
+const  {window} = new JSDOM('')
+const DOMPurify = createDOMPurify(window)
 
 // Connect to MongoDB
 mongoose
@@ -85,7 +92,7 @@ function logChatToFile(chatroomName, messages){
     'chat_logs',
     `${chatroomName}_${Date.now()}.txt`
   );
-  const logContent = messages?.map((msg)=> {
+  const logContent = messages.map((msg)=> {
     if (msg.file) {
       return `${msg.from} sent a file at ${new Date().toISOString()}`
     } else {
@@ -218,12 +225,15 @@ if (reciepientWs) {
       } else {
         userMessageCounts.set(data.username, count + 1);
         
+        //Sanitize the HTML message
+        const sanitizedMessage = DOMPurify.sanitize(data.message)
+
         //store message in chat history
         const chatroomName = getChatroomName(data.username, data.recipient)
         const history = chatHistory.get(chatroomName) || [];
         history.push({
           from: data.username, 
-          message:data.message,
+          message:sanitizedMessage,
           file: null,
         })
         chatHistory.set(chatroomName, history);
@@ -235,15 +245,16 @@ if (reciepientWs) {
             JSON.stringify({
               type: 'message',
               from: data.username,
-              message: data.message
+              message: sanitizedMessage,
             })
           )
         }
+        //send message back to the sender
         ws.send(
           JSON.stringify({
             type:'message',
             from: data.username,
-            message: data.message
+            message: sanitizedMessage,
           })
         )
       }
@@ -260,8 +271,7 @@ if (reciepientWs) {
       //Log chats for all chatrooms involving the disconnected user
       chatHistory.forEach((messages, chatroomName) => {
         if (chatroomName.includes(ws.username)) {
-          logChatToFile(chatroomName, messages);
-         
+          logChatToFile(chatroomName, messages); 
         }
       })
     }

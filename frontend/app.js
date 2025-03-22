@@ -22,6 +22,74 @@ const authErrorDiv = document.getElementById('auth-error');
 const chatroomErrorDiv = document.getElementById('chatroom-error');
 const messageBox = document.getElementById('message-box');
 const fileInput = document.getElementById('file-input');
+const emojiPicker = document.getElementById('emoji-picker');
+const emojiBtn = document.getElementById('emoji-btn');
+const boldBtn = document.getElementById('bold-btn');
+const italicBtn = document.getElementById('italic-btn');
+
+
+const pickerOptions = {
+  onEmojiSelect: (emoji) => {
+    messageBox.value += emoji.native; // inserts the selected emoji into the message
+    emojiPicker.style.display = 'none';
+  },
+    dynamicWidth:false
+};
+
+const picker = new EmojiMart.Picker(pickerOptions) 
+
+// append the picker to the emoji picker container
+emojiPicker.appendChild(picker)
+
+//Toggle for the emoji picker visibility
+emojiBtn.addEventListener('click', ()=> {
+  emojiPicker.style.display = 
+    emojiPicker.style.display === 'none' ? 'block' : 'none'
+})
+
+
+//bold formatting
+boldBtn.addEventListener('click', ()=> {
+  const selectedText = messageBox.value.substring(
+    messageBox.selectionStart,
+    messageBox.selectionEnd
+  );
+   if (selectedText) {
+    const newText = `**${selectedText}**`;
+    messageBox.setRangeText(
+      newText,
+      messageBox.selectionStart,
+    messageBox.selectionEnd,
+    'end'
+    )
+   }
+  })
+//Italic formatting
+italicBtn.addEventListener('click', ()=> {
+  const selectedText = messageBox.value.substring(
+    messageBox.selectionStart,
+    messageBox.selectionEnd
+  );
+   if (selectedText) {
+    const newText = `*${selectedText}*`;
+    messageBox.setRangeText(
+      newText,
+      messageBox.selectionStart,
+      messageBox.selectionEnd,
+      'end'
+    );
+   }
+})
+
+//Function to parse and sanitize formatted text
+function formatMessage(text){
+  // convert markdown HTML 
+  const dirtyHtml = marked.parse(text)
+
+  // Sanitize the HTML to prevennt XSS attacks
+  return DOMPurify.sanitize(dirtyHtml)
+}
+
 
 const secretKey = new Uint8Array(32) 
 
@@ -66,8 +134,8 @@ function displayFile(fileData, from, mimeType = 'application/octet-stream'){
     //display image
     const img = document.createElement('img');
     img.src = fileUrl;
-    img.style.maxWidth = '100px';
-    img.style.maxHeight = '100px';
+    img.style.maxWidth = '250px';
+    img.style.maxHeight = '250px';
     img.onload =()=> URL.revokeObjectURL(fileUrl); //clean up object URL after the link is clicked
     fileElement.appendChild(img)
   } else {
@@ -99,7 +167,9 @@ function displayMessages(messages) {
     else {
       //Display text message
       const messageElement = document.createElement('div')
-      messageElement.textContent = `${msg.from}: ${msg.message}`;
+      messageElement.className = 'message';
+      messageElement.innerHTML = `<strong>${msg.from}:</strong> 
+      ${formatMessage(msg.message)}`;
       messagesDiv.appendChild(messageElement);
     };
 
@@ -123,7 +193,7 @@ function initializeWebSocket() {
   };
 
 
-  socket.onmessage = (event) => {
+  socket.onmessage = async (event) => {
     const data = JSON.parse(event.data);
     console.log('Received message:', data);
 
@@ -140,9 +210,36 @@ function initializeWebSocket() {
     } else if (data.type === 'registration_failed') {
       authErrorDiv.textContent = data.error;
     } else if (data.type === 'chat_history') {
+
+      //Decrypt each file message in the chat
+
+      const decryptedMessages = await Promise.all(
+        data.messages.map(async (msg)=> {
+          if (msg.file) {
+            try {
+              const decryptedFile = await decryptFile(
+                new Uint8Array(msg.file),
+                new Uint8Array(msg.iv),
+                secretKey
+              );
+              return {
+                ...msg,
+                file: decryptedFile,
+                mimeType: msg.mimeType,
+              }
+            } catch (error) {
+              console.error('Decryption error:', error)
+              return msg; // returns the original message if decrption fails
+            }
+          } else{
+            return msg;
+          }
+        })
+      )
+
       //Load chat history for the selected recipient
-      chatHistory.set(data.chatroomName, data.messages)
-        displayMessages(data.messages)
+      chatHistory.set(data.chatroomName, decryptedMessages)
+        displayMessages(decryptedMessages)
     } else if (data.type === 'message') {
      //Add the message to the chat history
      const chatroomName = getChatroomName(currentUser, data.from)
@@ -180,7 +277,8 @@ function initializeWebSocket() {
 
       //display the file when/if the reciepient is currently selected
       if (currentRecipient === data.from) {
-        displayMessages(history);
+        displayFile(decryptedFile, data.from, data.mimeType)
+        //displayMessages(history);
       }
 
     }
@@ -279,19 +377,24 @@ fileInput.addEventListener('change', async (event)=> {
     const fileBuffer = await file.arrayBuffer();
     const {iv, encryptedData} = await encryptFile(fileBuffer, secretKey);
 
+
+
+      //immediately display the original file to the sender
+      displayFile(new Uint8Array(fileBuffer), currentUser, file.type)
+
     //Add the file to the chat history for the sender
     const chatroomName = getChatroomName(currentUser, currentRecipient)
     const history = chatHistory.get(chatroomName) || []
     history.push({
       from: currentUser,
       message: null,
-      file: fileBuffer, 
+      file: new Uint8Array(fileBuffer), 
       mimeType:file.type,
     })
     chatHistory.set(chatroomName, history);
 
     //Display the updated messages 
-    displayMessages(history);
+    //displayMessages(history);
 
     //send the encrypted file to the backend
     socket.send(
