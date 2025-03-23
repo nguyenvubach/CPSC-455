@@ -1,15 +1,15 @@
-Here’s how the `README.md` should be formatted for GitHub:
-
-````markdown
-# Websocket Chatbox
+````md
+# WebSocket Chatbox
 
 ## Introduction
 
-A real-time chat application that allows multiple users to communicate instantly.
+A real-time chat application that allows multiple users to communicate instantly, with multi-layer encryption.
 
 ---
 
 ## Features
+
+### Phase 1:
 
 - Real-time Messaging
 - Secure Connection
@@ -17,16 +17,26 @@ A real-time chat application that allows multiple users to communicate instantly
 - Rate Limiting
 - Connection Handling
 
+### Phase 2:
+
+- User-friendly Interface
+- File Sharing Capability
+- Emoji & Rich Media Support
+- Security Hardening
+- Enhanced User Authentication
+
 ---
 
 ## User Guide
 
 ### Prerequisites
 
-- `.env` file will be provided via Canvas submission in a zip file.
-- Ensure that you have Node.js and npm installed.
+- `.env`, SSL, and chat log files will be provided via Canvas submission in a zip file.
+- Ensure that you have **Node.js** and **npm** installed.
 
-### Installation
+---
+
+## Installation
 
 1. Clone the repository:
    ```bash
@@ -37,38 +47,70 @@ A real-time chat application that allows multiple users to communicate instantly
 2. Navigate to the project directory:
    ```bash
    cd CPSC-455
-   cd backend
    ```
-3. Install dependencies using npm:
+3. Split the terminal into **four**: one for the backend and three (or more) for the frontend.
+4. Setup the backend:
    ```bash
+   cd backend
+   npm i
+   ```
+5. Setup the frontend:
+   ```bash
+   cd frontend
    npm i
    ```
 
-### Running the Application
+---
 
-**Backend:**
+## SSL Installation
+
+1. Navigate back to the main project folder:
+   ```bash
+   cd ../
+   ```
+2. Generate an SSL certificate:
+   ```bash
+   openssl req -x509 -newkey rsa:4096 -keyout private_key.pem -out certificate.pem -days 365 -nodes -subj "/CN=localhost" -addext "subjectAltName=IP:your_IP_address"
+   ```
+3. Move the newly created `.pem` files into the `ssl` folder.
+4. Update the **index.js** file (lines 19-20) with the correct paths:
+   ```
+   cert: readFileSync('../ssl/certificate.pem'), // Replace with your certificate path
+   key: readFileSync('../ssl/private_key.pem'), // Replace with your private key path
+   ```
+
+---
+
+## Running the Application
+
+### Backend:
 
 ```bash
 npm start
 ```
 
-**Frontend:**
+### Frontend:
 
-- Install the **Live Server** extension from GitHub.
-- Right-click the `.html` file and select **Open with Live Server** (`Alt+L Alt+O`).
+For all frontend terminals, run:
 
-**Alternative:**  
-If you encounter port connection issues, change the port (e.g., use `5001` instead of `5000`).
+```bash
+npm start
+```
 
 ---
 
-## Technologies
+## Technologies Used
 
 - JavaScript (JS)
 - MongoDB
 - HTML / CSS
 - DOM Elements
 
-```
-AI uses for readme.md and changelog.md format
-```
+---
+
+## AI Integration
+
+- AI usage for **README.md** and **changelog.md** formatting.
+- AI guidance for **encryption implementation** and **security explanations**.
+
+---

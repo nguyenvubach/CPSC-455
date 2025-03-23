@@ -1,8 +1,11 @@
-
-
 let socket;
 let currentUser;
 let currentRecipient
+
+//RSA and AES Keys
+let rsaKeyPair;
+let aesKey; 
+const publicKeys = new Map();
 
 const chatHistory = new Map()
 
@@ -121,6 +124,93 @@ const decrypted = await crypto.subtle.decrypt(algorithm, key, encryptedData);
 return new Uint8Array(decrypted)
 }
 
+async function generateRSAKeyPair() {
+  return await crypto.subtle.generateKey(
+    {
+      name: 'RSA-OAEP',
+      modulusLength: 4096,
+      publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
+      hash: 'SHA-256',
+    },
+    true,
+    ['encrypt', 'decrypt']
+  );
+}
+
+//Export Public Key as JWK
+async function exportPublicKey(key) {
+  return await crypto.subtle.exportKey('jwk', key);
+}
+
+//Import Public key as JWK
+
+async function importPublicKey(jwk) {
+  return await crypto.subtle.importKey(
+    "jwk", jwk,
+    {name: 'RSA-OAEP', hash:'SHA-256'},
+    true,
+    ['encrypt']
+  );
+}
+
+// Generate AES Key
+async function generateAESKey() {
+  return await crypto.subtle.generateKey(
+    { name: 'AES-CBC', length: 256 },
+    true,
+    ['encrypt', 'decrypt']
+  )
+}
+
+// Encrypt Message with AES
+async function encryptMessage(message, key) {
+  const iv = crypto.getRandomValues(new Uint8Array(16)); 
+  const encodedMessage = new TextEncoder().encode(message);
+  const encrypted = await crypto.subtle.encrypt(
+    { name: 'AES-CBC', iv },
+    key,
+    encodedMessage
+  );
+  return { iv, encryptedData: new Uint8Array(encrypted) };
+}
+
+// Decrypt Message with AES
+async function decryptMessage(encryptedData, iv, key) {
+  const decrypted = await crypto.subtle.decrypt(
+    { name: 'AES-CBC', iv },
+    key,
+    encryptedData
+  );
+  return new TextDecoder().decode(decrypted);
+}
+
+// Encrypt AES Key with RSA
+async function encryptAESKey(key, publicKey) {
+  const exportedKey = await crypto.subtle.exportKey('raw', key);
+  const encryptedKey = await crypto.subtle.encrypt(
+    { name: 'RSA-OAEP' },
+    publicKey,
+    exportedKey
+  );
+  return new Uint8Array(encryptedKey);
+}
+
+// Decrypt AES Key with RSA
+async function decryptAESKey(encryptedKey, privateKey) {
+  const decryptedKey = await crypto.subtle.decrypt(
+    { name: 'RSA-OAEP' },
+    privateKey,
+    encryptedKey
+  );
+  return await crypto.subtle.importKey(
+    'raw',
+    decryptedKey,
+    { name: 'AES-CBC', length: 256 },
+    true,
+    ['encrypt', 'decrypt']
+  );
+}
+
 // display a file (e.g, image) in the chat
 function displayFile(fileData, from, mimeType = 'application/octet-stream'){
   const fileBlob = new Blob([fileData], {type : mimeType});
@@ -134,8 +224,8 @@ function displayFile(fileData, from, mimeType = 'application/octet-stream'){
     //display image
     const img = document.createElement('img');
     img.src = fileUrl;
-    img.style.maxWidth = '250px';
-    img.style.maxHeight = '250px';
+    img.style.maxWidth = '300px';
+    img.style.maxHeight = '300px';
     img.onload =()=> URL.revokeObjectURL(fileUrl); //clean up object URL after the link is clicked
     fileElement.appendChild(img)
   } else {
@@ -186,7 +276,7 @@ function getChatroomName(user1, user2){
 
 // Initialize WebSocket connection
 function initializeWebSocket() {
-  socket = new WebSocket('wss://localhost:5000');
+  socket = new WebSocket('wss://192.168.91.1:5000');
 
   socket.onopen = () => {
     console.log('WebSocket connection established');
@@ -240,18 +330,49 @@ function initializeWebSocket() {
       //Load chat history for the selected recipient
       chatHistory.set(data.chatroomName, decryptedMessages)
         displayMessages(decryptedMessages)
-    } else if (data.type === 'message') {
+    }else if (data.type === 'public_key') {
+      //store recipients public key
+      const publicKey = await importPublicKey(data.publicKey);
+      publicKeys.set(data.username, publicKey)
+    }
+     else if (data.type === 'message') {
      //Add the message to the chat history
-     const chatroomName = getChatroomName(currentUser, data.from)
-     const history = chatHistory.get(chatroomName) || []
-     history.push({
-      from: data.from,
-      message:data.message,
-      file:null,
-      mimeType:null
-     })
-     chatHistory.set(chatroomName, history)
+     if (data.iv && data.encryptedAESKey) {
+      // Decrypt the AES key
+      const encryptedAESKey = new Uint8Array(data.encryptedAESKey);
+      aesKey = await decryptAESKey(encryptedAESKey, rsaKeyPair.privateKey);
 
+      // Decrypt the message
+      const decryptedMessage = await decryptMessage(
+        new Uint8Array(data.message),
+        new Uint8Array(data.iv),
+        aesKey
+      );
+
+      // Display the decrypted message
+      const chatroomName = getChatroomName(currentUser, data.from);
+      const history = chatHistory.get(chatroomName) || [];
+      history.push({
+        from: data.from,
+        message: decryptedMessage,
+        file: null,
+        mimeType: null,
+      });
+      chatHistory.set(chatroomName, history);
+      displayMessages(history);
+    } else {
+      // Plaintext message (e.g., sender's own message)
+      const chatroomName = getChatroomName(currentUser, data.from);
+      const history = chatHistory.get(chatroomName) || [];
+      history.push({
+        from: data.from,
+        message: data.message,
+        file: null,
+        mimeType: null,
+      });
+      chatHistory.set(chatroomName, history);
+      displayMessages(history);
+      }
      //Display the message if the recipient is currently selected
      if (currentRecipient === data.from) {
       displayMessages(history)
@@ -338,26 +459,34 @@ function initializeWebSocket() {
     )
 
   }
-// Send message
-sendBtn.addEventListener('click', () => {
-  const message = messageBox.value; // Ensure 'messageBox' is correctly defined
+// Send Message
+sendBtn.addEventListener('click', async () => {
+  const message = messageBox.value;
+  console.log('message',message)
   if (message && socket && currentRecipient) {
-    // Add the message to the chat history for the sender
-    const chatroomName = getChatroomName(currentUser, currentRecipient);
-    const history = chatHistory.get(chatroomName) || [];
-    history.push({ from: currentUser, message, file: null, mimeType: null });
-    chatHistory.set(chatroomName, history);
+    console.log('message',message)
+    console.log('socket',socket)
+    console.log('currentRecipeint', currentRecipient)
+    // Generate a new AES key for this message
+    const aesKey = await generateAESKey();
 
-    // Display the updated messages
-    displayMessages(history);
+    // Encrypt the message
+    const { iv, encryptedData } = await encryptMessage(message, aesKey);
 
-    // Send the message to the backend
+    // Encrypt the AES key with the recipient's public key
+    const recipientPublicKey = publicKeys.get(currentRecipient);
+    console.log('recipientPublicKey', recipientPublicKey)
+    const encryptedAESKey = await encryptAESKey(aesKey, recipientPublicKey);
+
+    // Send the encrypted message and AES key to the backend
     socket.send(
       JSON.stringify({
         type: 'message',
         username: currentUser,
         recipient: currentRecipient,
-        message,
+        message: Array.from(encryptedData),
+        iv: Array.from(iv),
+        encryptedAESKey: Array.from(encryptedAESKey),
       })
     );
 
