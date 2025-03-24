@@ -21,29 +21,6 @@ All notable changes to this project will be documented in this file.
 
 ## [3.5-beta] - 2025-03-22
 
-**Commit:** `# Changelog
-
-All notable changes to this project will be documented in this file.
-
----
-
-## [3.6-beta] - 2025-03-23
-
-**Commit:** `Pending Commit Hash`
-
-### Changes:
-
-- Phase 2 features fully functional.
-- Updated `README.md` and `CHANGELOG.md`.
-
-### Bug Fixes:
-
-- Fixed issue where the `send message` function was not called.
-
----
-
-## [3.5-beta] - 2025-03-22
-
 **Commit:** `Pending Commit Hash`
 
 ### New Features:
