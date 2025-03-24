@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [3.6-beta] - 2025-03-23
 
-**Commit:** `Pending Commit Hash`
+**Commit:** `f608ca313d0453ec3852b4539f02c6d78fab9c2c`
 
 ### Changes:
 
@@ -21,7 +21,7 @@ All notable changes to this project will be documented in this file.
 
 ## [3.5-beta] - 2025-03-22
 
-**Commit:** `Pending Commit Hash`
+**Commit:** `7c3a0f1bec8275d8948dd570c17bf1c8156bb807`
 
 ### New Features:
 
