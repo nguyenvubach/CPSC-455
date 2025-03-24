@@ -56,7 +56,7 @@ A real-time chat application that allows multiple users to communicate instantly
    ```
 5. Setup the frontend:
    ```bash
-   cd frontend
+   cd ../frontend
    npm i
    ```
 
@@ -74,10 +74,22 @@ A real-time chat application that allows multiple users to communicate instantly
    ```
 3. Move the newly created `.pem` files into the `ssl` folder.
 4. Update the **index.js** file (lines 19-20) with the correct paths:
-   ```
+   ```js
    cert: readFileSync('../ssl/certificate.pem'), // Replace with your certificate path
    key: readFileSync('../ssl/private_key.pem'), // Replace with your private key path
    ```
+
+**Note:** `openssl` needs to be installed on your machine.  
+Example installation:
+
+- **Windows** (using Chocolatey):
+  ```bash
+  choco install openssl
+  ```
+- **Linux (Debian/Ubuntu-based)**:
+  ```bash
+  sudo apt install openssl
+  ```
 
 ---
 
