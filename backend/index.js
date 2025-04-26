@@ -16,8 +16,8 @@ const PORT = 5000;
 
 // Load SSL certificates
 const server = createServer({
-  cert: readFileSync('../ssl/cert.pem'), // Replace with your certificate path
-  key: readFileSync('../ssl/key.pem'), // Replace with your private key path
+  cert: readFileSync('./ssl/cert.pem'), // Replace with your certificate path
+  key: readFileSync('./ssl/key.pem'), // Replace with your private key path
 });
 
 // Convert the file URL to a file path
