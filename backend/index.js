@@ -484,6 +484,6 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0',() => {
   console.log(`WebSocket server running on wss://0.0.0.0:${PORT}`);
 });
