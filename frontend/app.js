@@ -270,7 +270,7 @@ function getChatroomName(user1, user2) {
 
 // Initialize WebSocket connection
 function initializeWebSocket() {
-  socket = new WebSocket('wss://localhost:5000');
+  socket = new WebSocket('https://chatinsocket-j5kr.onrender.com');
 
   socket.onopen = () => {
     console.log('WebSocket connection established');
