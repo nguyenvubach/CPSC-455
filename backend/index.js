@@ -21,8 +21,8 @@ const server = createServer()
 //});
 
 // Convert the file URL to a file path
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = path.dirname(__filename);
 
 // WebSocket server setup
 const wss = new WebSocketServer({ server });
@@ -137,31 +137,31 @@ function getChatroomName(user1, user2) {
 }
 
 // Function to log chats to a .txt file
-function logChatToFile(chatroomName, messages) {
-  const logDirectory = path.join(__dirname, 'chat_logs');
-  if (!existsSync(logDirectory)) {
-    mkdirSync(logDirectory, { recursive: true });
-  }
-  const logFilePath = path.join(
-    __dirname,
-    'chat_logs',
-    `${chatroomName}_${Date.now()}_${Math.random()
-      .toString(36)
-      .substring(7)}.txt`
-  );
-  const logContent = messages
-    .map((msg) => {
-      if (msg.file) {
-        return `${msg.from} sent a file at ${new Date().toISOString()}`;
-      } else {
-        return `${msg.from}: ${msg.message} (${new Date().toISOString()})`;
-      }
-    })
-    .join('\n');
+// function logChatToFile(chatroomName, messages) {
+//   const logDirectory = path.join(__dirname, 'chat_logs');
+//   if (!existsSync(logDirectory)) {
+//     mkdirSync(logDirectory, { recursive: true });
+//   }
+//   const logFilePath = path.join(
+//     __dirname,
+//     'chat_logs',
+//     `${chatroomName}_${Date.now()}_${Math.random()
+//       .toString(36)
+//       .substring(7)}.txt`
+//   );
+//   const logContent = messages
+//     .map((msg) => {
+//       if (msg.file) {
+//         return `${msg.from} sent a file at ${new Date().toISOString()}`;
+//       } else {
+//         return `${msg.from}: ${msg.message} (${new Date().toISOString()})`;
+//       }
+//     })
+//     .join('\n');
 
-  writeFileSync(logFilePath, logContent, 'utf8');
-  console.log(`Chat logged to ${logFilePath}`);
-}
+//   writeFileSync(logFilePath, logContent, 'utf8');
+//   console.log(`Chat logged to ${logFilePath}`);
+// }
 
 //Validate password
 function validatePassword(password) {
@@ -474,7 +474,7 @@ wss.on('connection', (ws, req) => {
       chatHistory.forEach((messages, chatroomName) => {
         if (chatroomName.includes(ws.username)) {
           console.log(ws.username);
-          logChatToFile(chatroomName, messages);
+          //logChatToFile(chatroomName, messages);
         }
       });
     }
