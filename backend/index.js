@@ -1,4 +1,4 @@
-import { createServer } from 'https';
+import { createServer } from 'http';
 import { existsSync, mkdir, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { WebSocketServer } from 'ws';
 import bcrypt from 'bcrypt';
