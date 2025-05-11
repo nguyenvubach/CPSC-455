@@ -1,507 +1,595 @@
 import { createServer } from 'http';
-import { existsSync, mkdir, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { WebSocketServer } from 'ws';
 import bcrypt from 'bcrypt';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import User from './model/User.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { JSDOM } from 'jsdom';
-import createDOMPurify from 'dompurify';
+import User from './model/User.js';
+import ChatHistory from './model/ChatHistory.js';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from './firebaseConfig.js';
 
 dotenv.config();
-              //production || development
+
+// Server Configuration
 const PORT = process.env.PORT || 5000;
-
-// Load SSL certificates
-const server = createServer()
-  // cert: readFileSync('./cert.pem'), // Replace with your certificate path
-  // key: readFileSync('./key.pem'), // Replace with your private key path
-//});
-
-// Convert the file URL to a file path
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// WebSocket server setup
+// Create HTTP server
+const server = createServer((req, res) => {
+  if (req.url === '/') {
+    res.writeHead(200);
+    res.end('WebSocket server is running');
+  }
+});
+
+// Error handling
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Rejection:', err);
+});
+
+// WebSocket Server
 const wss = new WebSocketServer({ server });
 
-// Stored connected clients
+// Application State
 const connectedClients = new Map(); // Map<username, WebSocket>
-const activeUsers = new Set(); // Set of active users
-const chatHistory = new Map(); // Map<chatroomName, Array<{ from: string, message: string, file: Uint8Array | null }>>
+const activeUsers = new Set(); // Set of active usernames
+// const chatHistory = new Map(); // Map<chatroomName, Array<message>>
 const failedLoginAttempts = new Map(); // Map<username, { attempts: number, lastAttempt: number }>
-const publicKeys = new Map();
+const userStatus = new Map(); // Map<username, {status: 'online'|'offline', lastActive: Date}>
+const typingUsers = new Map(); // Map<username, recipientUsername>
 
-const MAX_FAILED_ATTEMPTS = 5; // Maximum allowed failed attempts
-const LOCKOUT_DURATION = 5 * 60 * 1000; // 5 minutes in milliseconds
-
-// Rate limit
+// Security Constants
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION = 5 * 60 * 1000; // 5 minutes
 const RATE_LIMIT = 5; // Max messages per second
-const userMessageCounts = new Map();
-
-// Heartbeat interval (in milliseconds)
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
-
-// Initialize DOMPurify
-const { window } = new JSDOM('');
-const DOMPurify = createDOMPurify(window);
 
 // Connect to MongoDB
 mongoose
-  .connect(process.env.dbURI)
-  .then(() => console.log('DB Connected!'))
-  .catch((e) => console.log(e));
+  .connect(process.env.dbURI, {})
+  .then(() => console.log('Connected to MongoDB'))
+  .catch((err) => console.error('MongoDB connection error:', err));
 
-// Authenticate/Login user
+// Helper Functions
+function getChatroomName(user1, user2) {
+  return [user1, user2].sort().join('-');
+}
+
+function broadcastActiveUsers() {
+  const userList = Array.from(activeUsers).map((username) => ({
+    username,
+    status: userStatus.get(username)?.status || 'offline',
+  }));
+
+  wss.clients.forEach((client) => {
+    if (client.readyState === client.OPEN) {
+      client.send(
+        JSON.stringify({
+          type: 'user_list',
+          users: userList,
+        })
+      );
+    }
+  });
+}
+
+function logChatToFile(chatroomName, messages) {
+  const logDir = path.join(__dirname, 'chat_logs');
+  if (!existsSync(logDir)) mkdirSync(logDir);
+
+  const logFile = path.join(logDir, `${chatroomName}_${Date.now()}.txt`);
+  console.log(messages);
+  const logContent = messages
+    .map(
+      (msg) =>
+        `${msg.from}: ${
+          msg.message ? '[encrypted text]' : '[encrypted file]'
+        } (${new Date(msg.timestamp).toISOString()})`
+    )
+    .join('\n');
+
+  writeFileSync(logFile, logContent);
+  console.log(`Chat logged to ${logFile}`);
+}
+
+// Authentication Functions
 async function authenticate(username, password) {
   const now = Date.now();
-  const userAttempts = failedLoginAttempts.get(username) || {
+  const attempts = failedLoginAttempts.get(username) || {
     attempts: 0,
     lastAttempt: 0,
   };
 
-  // Check if the user is currently locked out
+  // Check if account is locked
   if (
-    userAttempts.attempts >= MAX_FAILED_ATTEMPTS &&
-    now - userAttempts.lastAttempt < LOCKOUT_DURATION
+    attempts.attempts >= MAX_FAILED_ATTEMPTS &&
+    now - attempts.lastAttempt < LOCKOUT_DURATION
   ) {
-    return {
-      success: false,
-      message: 'Account temporarily locked. Please try again later.',
-    };
+    return { success: false, message: 'Account locked. Try again later.' };
   }
 
   const user = await User.findOne({ username });
-  if (user && (await bcrypt.compare(password, user.password))) {
-    // Reset failed attempts on successful login
+  if (!user) {
+    return { success: false, message: 'User not found' };
+  }
+
+  const match = await bcrypt.compare(password, user.password);
+  if (match) {
     failedLoginAttempts.delete(username);
-    return { success: true };
+    return { success: true, user };
   } else {
-    // Increment failed attempts
-    userAttempts.attempts += 1;
-    userAttempts.lastAttempt = now;
-    failedLoginAttempts.set(username, userAttempts);
-    return {
-      success: false,
-      message: 'Incorrect password/user does not exist',
-    };
+    attempts.attempts++;
+    attempts.lastAttempt = now;
+    failedLoginAttempts.set(username, attempts);
+    return { success: false, message: 'Invalid password' };
   }
 }
-// Register user
-async function registerUser(username, password) {
-  const passwordValidation = validatePassword(password);
-  if (!passwordValidation.valid) {
-    throw new Error(passwordValidation.message);
+
+async function registerUser(username, password, publicKey) {
+  // Validate password
+  if (password.length < 8) {
+    throw new Error('Password must be at least 8 characters');
   }
 
-  // Generate RSA key pair
-  const keyPair = await crypto.subtle.generateKey(
-    {
-      name: 'RSA-OAEP',
-      modulusLength: 4096,
-      publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
-      hash: 'SHA-256',
-    },
-    true,
-    ['encrypt', 'decrypt']
-  );
+  // Check if user exists
+  const existingUser = await User.findOne({ username });
+  if (existingUser) {
+    throw new Error('Username already exists');
+  }
 
-  // Export the public key as JWK
-  const publicKey = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+  // Create new user
+  const newUser = new User({
+    username,
+    password,
+    publicKey,
+  });
 
-  // Export the private key as JWK (store securely on the backend)
-  const privateKey = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
-
-  // Create a new user with the public key
-  const newUser = new User({ username, password, publicKey, privateKey });
   await newUser.save();
-  console.log('New user:', newUser);
+  return newUser;
 }
 
-// Broadcast active users to all clients
-function broadcastActiveUsers() {
-  const userList = Array.from(activeUsers);
-  wss.clients.forEach((client) => {
-    if (client.readyState === client.OPEN) {
-      client.send(JSON.stringify({ type: 'user_list', users: userList }));
+// WebSocket Server Event Handlers
+wss.on('connection', (ws, req) => {
+  console.log(`New connection from ${req.socket.remoteAddress}`);
+
+  // Track connection time
+  ws.connectionTime = Date.now();
+  ws.isAlive = true;
+
+  // Setup heartbeat
+  const heartbeatInterval = setInterval(() => {
+    if (!ws.isAlive) {
+      console.log(`Terminating connection to ${ws.username || 'unknown user'}`);
+      return ws.terminate();
+    }
+
+    ws.isAlive = false;
+    ws.ping();
+  }, HEARTBEAT_INTERVAL);
+
+  // Handle pong responses
+  ws.on('pong', () => {
+    ws.isAlive = true;
+    if (ws.username) {
+      userStatus.set(ws.username, {
+        status: 'online',
+        lastActive: new Date(),
+      });
+      broadcastUserStatus(ws.username, 'online');
     }
   });
-}
 
-// Function to generate a unique chatroom name
-function getChatroomName(user1, user2) {
-  const users = [user1, user2].sort(); // Sort usernames alphabetically
-  return users.join('-'); // Join with a hyphen
-}
-
-// Function to log chats to a .txt file
-function logChatToFile(chatroomName, messages) {
-  const logDirectory = path.join(__dirname, 'chat_logs');
-  if (!existsSync(logDirectory)) {
-    mkdirSync(logDirectory, { recursive: true });
-  }
-  const logFilePath = path.join(
-    __dirname,
-    'chat_logs',
-    `${chatroomName}_${Date.now()}_${Math.random()
-      .toString(36)
-      .substring(7)}.txt`
-  );
-  const logContent = messages
-    .map((msg) => {
-      if (msg.file) {
-        return `${msg.from} sent a file at ${new Date().toISOString()}`;
-      } else {
-        return `${msg.from}: ${msg.message} (${new Date().toISOString()})`;
-      }
-    })
-    .join('\n');
-
-  writeFileSync(logFilePath, logContent, 'utf8');
-  console.log(`Chat logged to ${logFilePath}`);
-}
-
-//Validate password
-function validatePassword(password) {
-  const minLength = 8;
-  const hasUppercase = /[A-Z]/.test(password);
-  const hasLowercase = /[a-z]/.test(password);
-  const hasNumber = /[0-9]/.test(password);
-  const hasSpecialChar = /[!@#$%^&*]/.test(password);
-
-  if (password.length < minLength) {
-    return {
-      valid: false,
-      message: 'Password must be at least 8 characters long.',
-    };
-  }
-  if (!hasUppercase) {
-    return {
-      valid: false,
-      message: 'Password must contain at least one uppercase letter.',
-    };
-  }
-  if (!hasLowercase) {
-    return {
-      valid: false,
-      message: 'Password must contain at least one lowercase letter.',
-    };
-  }
-  if (!hasNumber) {
-    return {
-      valid: false,
-      message: 'Password must contain at least one number.',
-    };
-  }
-  if (!hasSpecialChar) {
-    return {
-      valid: false,
-      message:
-        'Password must contain at least one special character (!@#$%^&*).',
-    };
-  }
-
-  return { valid: true };
-}
-
-// Handle WebSocket connections
-wss.on('connection', (ws, req) => {
-  console.log('New client connected');
-  const clientIp = req.socket.remoteAddress;
-  console.log(`New client connected from IP: ${clientIp}`);
-
-  // Set up heartbeat
-  let heartbeatInterval;
-  const setupHeartbeat = () => {
-    heartbeatInterval = setInterval(() => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'heartbeat' }));
-      }
-    }, HEARTBEAT_INTERVAL);
-  };
-
-  // Start heartbeat
-  setupHeartbeat();
-
+  // Message handler
   ws.on('message', async (message) => {
-    let data;
-    if (message instanceof Buffer) {
-      data = JSON.parse(message.toString('utf8'));
-    } else {
-      data = JSON.parse(message);
-    }
-    console.log(`Received message from ${clientIp}:`, data);
-
-    if (data.type === 'login') {
-      const authResult = await authenticate(data.username, data.password);
-      if (authResult.success) {
-        connectedClients.set(data.username, ws);
-        activeUsers.add(data.username);
-        ws.username = data.username;
-
-        // Send the current user's public key to all clients
-        const user = await User.findOne({ username: data.username });
-        if (user && user.publicKey) {
-          wss.clients.forEach((client) => {
-            if (client.readyState === client.OPEN) {
-              client.send(
-                JSON.stringify({
-                  type: 'public_key',
-                  username: data.username,
-                  publicKey: user.publicKey,
-                })
-              );
-            }
-          });
-        }
-
-        // Send the public keys of all active users to the newly logged-in user
-        const activeUsersList = Array.from(activeUsers);
-        for (const username of activeUsersList) {
-          const activeUser = await User.findOne({ username });
-          if (activeUser && activeUser.publicKey) {
-            ws.send(
-              JSON.stringify({
-                type: 'public_key',
-                username: activeUser.username,
-                publicKey: activeUser.publicKey,
-              })
-            );
-          }
-        }
-
-        ws.send(
-          JSON.stringify({ type: 'login_successfull', username: data.username })
-        );
-        broadcastActiveUsers(); // Broadcast updated user list
-      } else {
-        ws.send(
-          JSON.stringify({
-            type: 'login_failed',
-            message: authResult.message,
-          })
-        );
-      }
-    } else if (data.type === 'register') {
-      try {
-        await registerUser(data.username, data.password);
-        ws.send(JSON.stringify({ type: 'registration_successfull' }));
-      } catch (error) {
-        ws.send(
-          JSON.stringify({
-            type: 'registration_failed',
-            error: error.message,
-          })
-        );
-      }
-    } else if (data.type === 'switch_chat') {
-      if (!connectedClients.has(data.username)) {
-        ws.send(
-          JSON.stringify({ type: 'error', message: 'User not logged in' })
-        );
-        return;
-      }
-
-      const chatroomName = getChatroomName(data.username, data.recipient);
-      const history = chatHistory.get(chatroomName) || [];
-      ws.send(
-        JSON.stringify({
-          type: 'chat_history',
-          chatroomName,
-          messages: history,
-        })
-      );
-    } else if (data.type === 'file') {
-      if (!connectedClients.has(data.username)) {
-        ws.send(
-          JSON.stringify({ type: 'error', message: 'User not logged in' })
-        );
-        return;
-      }
-
-      // Store the file in chat history
-      const chatroomName = getChatroomName(data.username, data.recipient);
-      const history = chatHistory.get(chatroomName) || [];
-      history.push({
-        from: data.username,
-        message: null,
-        file: data.file,
-        iv: data.iv,
-        mimeType: data.mimeType, // Include the MIME type
-      });
-      chatHistory.set(chatroomName, history);
-
-      // Send the file to the recipient
-      const recipientWs = connectedClients.get(data.recipient);
-      if (recipientWs) {
-        recipientWs.send(
-          JSON.stringify({
-            type: 'file',
-            from: data.username,
-            iv: data.iv,
-            file: data.file,
-            mimeType: data.mimeType, // Include the MIME type
-          })
-        );
-      }
-    } else if (data.type === 'public_key') {
-      // Store the users public key
-      publicKeys.set(data.username, data.publicKey);
-      console.log('Public Key Imported:', publicKeys);
-    } else if (data.type === 'message') {
-      if (!connectedClients.has(data.username)) {
-        ws.send(
-          JSON.stringify({ type: 'error', message: 'User not logged in' })
-        );
-        return;
-      }
+    try {
+      const data = JSON.parse(message.toString());
 
       // Rate limiting
-      const count = userMessageCounts.get(data.username) || 0;
-      if (count >= RATE_LIMIT) {
-        ws.send(
-          JSON.stringify({
-            type: 'rate_limit_exceeded',
-            message: 'Wait for 1 min',
-          })
-        );
-      } else {
-        userMessageCounts.set(data.username, count + 1);
+      if (data.type === 'message' || data.type === 'file') {
+        const count = (ws.messageCount || 0) + 1;
+        ws.messageCount = count;
 
-        // Retrieve the recipient's private key from the database
-        const recipient = await User.findOne({ username: data.recipient });
-        if (!recipient || !recipient.privateKey) {
+        if (count > RATE_LIMIT) {
           ws.send(
-            JSON.stringify({ type: 'error', message: 'Recipient not found' })
+            JSON.stringify({
+              type: 'rate_limit_exceeded',
+              message: 'Too many messages. Please wait.',
+            })
           );
           return;
         }
-
-        // Import the recipient's private key
-        const privateKey = await crypto.subtle.importKey(
-          'jwk',
-          recipient.privateKey,
-          { name: 'RSA-OAEP', hash: 'SHA-256' },
-          false,
-          ['decrypt']
-        );
-
-        // Decrypt the AES key
-        const decryptedAESKey = await crypto.subtle.decrypt(
-          { name: 'RSA-OAEP' },
-          privateKey,
-          new Uint8Array(data.encryptedAESKey)
-        );
-
-        // Import the decrypted AES key
-        const aesKey = await crypto.subtle.importKey(
-          'raw',
-          decryptedAESKey,
-          { name: 'AES-CBC', length: 256 },
-          false,
-          ['decrypt']
-        );
-
-        // Decrypt the message
-        const decryptedMessage = await crypto.subtle.decrypt(
-          { name: 'AES-CBC', iv: new Uint8Array(data.iv) },
-          aesKey,
-          new Uint8Array(data.message)
-        );
-
-        // Convert the decrypted message to a string
-        const message = new TextDecoder().decode(decryptedMessage);
-
-        // Sanitize the HTML message
-        const sanitizedMessage = DOMPurify.sanitize(message);
-
-        // Store the message in chat history
-        const chatroomName = getChatroomName(data.username, data.recipient);
-        const history = chatHistory.get(chatroomName) || [];
-        history.push({
-          from: data.username,
-          message: sanitizedMessage,
-          file: null,
-          iv: data.iv,
-          encryptedAESKey: data.encryptedAESKey,
-        });
-        chatHistory.set(chatroomName, history);
-
-        // Send the message to the recipient
-        const recipientWs = connectedClients.get(data.recipient);
-        if (recipientWs) {
-          recipientWs.send(
-            JSON.stringify({
-              type: 'message',
-              from: data.username,
-              message: sanitizedMessage,
-              iv: data.iv,
-              encryptedAESKey: data.encryptedAESKey,
-            })
-          );
-        }
-
-        //Send the message back to the sender
-        ws.send(
-          JSON.stringify({
-            type: 'message',
-            from: data.username,
-            message: sanitizedMessage,
-          })
-        );
       }
+
+      // Handle different message types
+      switch (data.type) {
+        case 'login':
+          await handleLogin(ws, data);
+          break;
+        case 'register':
+          await handleRegister(ws, data);
+          break;
+        case 'public_key':
+          handlePublicKey(ws, data);
+          break;
+        //typing indicator case
+        case 'typing':
+          await handleTypingIndicator(ws, data);
+          break;
+        case 'message':
+          await handleEncryptedMessage(ws, data);
+          break;
+        case 'file':
+          await handleEncryptedFile(ws, data);
+          break;
+        case 'switch_chat':
+          handleSwitchChat(ws, data);
+          break;
+        case 'heartbeat_ack':
+          // Reset message count periodically
+          if (ws.messageCount && Date.now() - (ws.lastReset || 0) > 1000) {
+            ws.messageCount = 0;
+            ws.lastReset = Date.now();
+          }
+          break;
+        default:
+          console.warn('Unknown message type:', data.type);
+      }
+    } catch (err) {
+      console.error('Error handling message:', err);
+      ws.send(
+        JSON.stringify({
+          type: 'error',
+          message: 'Internal server error',
+        })
+      );
     }
   });
 
-  setInterval(() => {
-    const now = Date.now();
-    for (const [username, attempts] of failedLoginAttempts.entries()) {
-      if (now - attempts.lastAttempt > LOCKOUT_DURATION) {
-        failedLoginAttempts.delete(username);
-      }
-    }
-  }, 60 * 60 * 1000); // Clean up every hour
-
+  // Cleanup on disconnect
   ws.on('close', () => {
+    clearInterval(heartbeatInterval);
+
     if (ws.username) {
+      userStatus.set(ws.username, {
+        status: 'offline',
+        lastActive: new Date(),
+      });
+      broadcastUserStatus(ws.username, 'offline');
+
       connectedClients.delete(ws.username);
       activeUsers.delete(ws.username);
       broadcastActiveUsers();
 
       // Log chats for all chatrooms involving this user
-      chatHistory.forEach((messages, chatroomName) => {
-        if (chatroomName.includes(ws.username)) {
-          console.log(ws.username);
-          logChatToFile(chatroomName, messages);
-        }
-      });
     }
-
-    clearInterval(heartbeatInterval);
-    console.log('Client disconnected');
   });
 });
+//message handler for typing indicators
+async function handleTypingIndicator(ws, data) {
+  if (!ws.username || !connectedClients.has(ws.username)) {
+    return;
+  }
 
-server.listen(PORT, '0.0.0.0',() => {
-  console.log(`WebSocket server running on wss://0.0.0.0:${PORT}`);
+  typingUsers.set(ws.username, data.recipient);
+
+  // Notify recipient
+  const recipientWs = connectedClients.get(data.recipient);
+  if (recipientWs) {
+    recipientWs.send(
+      JSON.stringify({
+        type: 'typing',
+        from: ws.username,
+        isTyping: true,
+      })
+    );
+  }
+
+  // Set timeout to clear typing status after 3 seconds
+  setTimeout(() => {
+    if (typingUsers.get(ws.username) === data.recipient) {
+      typingUsers.delete(ws.username);
+      if (recipientWs) {
+        recipientWs.send(
+          JSON.stringify({
+            type: 'typing',
+            from: ws.username,
+            isTyping: false,
+          })
+        );
+      }
+    }
+  }, 3000);
+}
+// Add new broadcast function
+function broadcastUserStatus(username, status) {
+  wss.clients.forEach((client) => {
+    if (client.readyState === client.OPEN) {
+      client.send(
+        JSON.stringify({
+          type: 'user_status',
+          username,
+          status,
+        })
+      );
+    }
+  });
+}
+
+// Message Handlers
+async function handleLogin(ws, data) {
+  const { username, password } = data;
+  const authResult = await authenticate(username, password);
+
+  if (authResult.success) {
+    // Store connection
+    connectedClients.set(username, ws);
+    activeUsers.add(username);
+    ws.username = username;
+
+    // Send success response
+    ws.send(
+      JSON.stringify({
+        type: 'login_success',
+        username,
+        activeUsers: Array.from(activeUsers),
+      })
+    );
+
+    // Broadcast updated user list
+    broadcastActiveUsers();
+
+    // Send the user's public key to all clients
+    const user = await User.findOne({ username });
+    if (user && user.publicKey) {
+      broadcastPublicKey(username, user.publicKey);
+    }
+
+    // Send public keys of all active users to the new client
+    const activeUsersList = Array.from(activeUsers);
+    for (const activeUser of activeUsersList) {
+      if (activeUser !== username) {
+        const user = await User.findOne({ username: activeUser });
+        if (user && user.publicKey) {
+          ws.send(
+            JSON.stringify({
+              type: 'public_key',
+              username: activeUser,
+              publicKey: user.publicKey,
+            })
+          );
+        }
+      }
+    }
+  } else {
+    ws.send(
+      JSON.stringify({
+        type: 'login_failed',
+        message: authResult.message,
+      })
+    );
+  }
+}
+
+async function handleRegister(ws, data) {
+  try {
+    const { username, password, publicKey } = data;
+    await registerUser(username, password, publicKey);
+    ws.send(JSON.stringify({ type: 'registration_success' }));
+  } catch (err) {
+    ws.send(
+      JSON.stringify({
+        type: 'registration_failed',
+        error: err.message,
+      })
+    );
+  }
+}
+
+function handlePublicKey(ws, data) {
+  if (!ws.username) return;
+
+  // Broadcast to all other clients
+  wss.clients.forEach((client) => {
+    if (client !== ws && client.readyState === client.OPEN) {
+      client.send(
+        JSON.stringify({
+          type: 'public_key',
+          username: ws.username,
+          publicKey: data.publicKey,
+        })
+      );
+    }
+  });
+}
+
+async function handleEncryptedMessage(ws, data) {
+  if (!ws.username || !connectedClients.has(ws.username)) {
+    ws.send(
+      JSON.stringify({
+        type: 'error',
+        message: 'Not authenticated',
+      })
+    );
+    return;
+  }
+
+  // Forward the encrypted message to recipient
+  const recipientWs = connectedClients.get(data.recipient);
+  if (recipientWs) {
+    recipientWs.send(
+      JSON.stringify({
+        type: 'message',
+        from: ws.username,
+        encryptedMessage: data.encryptedMessage,
+        iv: data.iv,
+        encryptedAesKey: data.encryptedAesKey,
+      })
+    );
+  }
+
+  // Store chat history to db (both encrypted and plaintext versions)
+  try {
+    const chatroomName = getChatroomName(ws.username, data.recipient);
+    const newMessage = new ChatHistory({
+      chatroomName,
+      from: ws.username,
+      message: data.message,
+      encryptedMessage: data.encryptedMessage,
+      iv: data.iv,
+      encryptedAesKey: data.encryptedAesKey,
+      timestamp: new Date(),
+    });
+    await newMessage.save();
+  } catch (error) {
+    console.error('Error saving message to database:', error);
+  }
+}
+
+async function handleEncryptedFile(ws, data) {
+  if (!ws.username || !connectedClients.has(ws.username)) {
+    ws.send(
+      JSON.stringify({
+        type: 'error',
+        message: 'Not authenticated',
+      })
+    );
+    return;
+  }
+
+  try {
+    // Create a reference to the storage location
+    // const fileRef = ref(
+    //   storage,
+    //   `encrypted_files/${Date.now()}_${ws.username}_${data.recipient}`
+    // );
+
+    // // Convert the encrypted file data back to Uint8Array
+    // const encryptedFileData = new Uint8Array(data.encryptedFile);
+     const fileRef = ref(storage, data.fileRef);
+    const encryptedFileData = await getBytes(fileRef);
+
+    // Upload the encrypted file to Firebase
+    const snapshot = await uploadBytes(fileRef, encryptedFileData, {
+      contentType: data.mimeType,
+      customMetadata: {
+        sender: ws.username,
+        recipient: data.recipient,
+        iv: JSON.stringify(data.iv),
+        encryptedAesKey: JSON.stringify(data.encryptedAesKey),
+        mimeType: data.mimeType,
+      },
+    });
+
+    // Get the download URL
+    const downloadURL = await getDownloadURL(snapshot.ref);
+
+    // Forward the file reference to recipient
+    const recipientWs = connectedClients.get(data.recipient);
+    if (recipientWs) {
+      recipientWs.send(
+        JSON.stringify({
+          type: 'file_reference',
+          from: ws.username,
+          fileRef: downloadURL,
+          iv: data.iv,
+          encryptedAesKey: data.encryptedAesKey,
+          mimeType: data.mimeType,
+        })
+      );
+    }
+
+    // Store in chat history
+    const chatroomName = getChatroomName(ws.username, data.recipient);
+    const newMessage = new ChatHistory({
+      chatroomName,
+      from: ws.username,
+      message: '[encrypted file]',
+      fileRef: downloadURL,
+      iv: data.iv,
+      encryptedAesKey: data.encryptedAesKey,
+      mimeType: data.mimeType,
+      timestamp: new Date(),
+    });
+    await newMessage.save();
+  } catch (error) {
+    console.error('Error handling encrypted file:', error);
+    ws.send(
+      JSON.stringify({
+        type: 'error',
+        message: 'Failed to process file',
+      })
+    );
+  }
+}
+
+async function handleSwitchChat(ws, data) {
+  if (!ws.username || !connectedClients.has(ws.username)) {
+    ws.send(
+      JSON.stringify({
+        type: 'error',
+        message: 'Not authenticated',
+      })
+    );
+    return;
+  }
+
+  const chatroomName = getChatroomName(data.username, data.recipient);
+  try {
+    const history = await ChatHistory.find({ chatroomName })
+      .sort({ timestamp: 1 })
+      .lean()
+      .exec();
+
+    ws.send(
+      JSON.stringify({
+        type: 'chat_history',
+        chatroomName,
+        messages: history,
+      })
+    );
+  } catch (error) {
+    console.error('Error retrieving chat history:', error);
+    ws.send(
+      JSON.stringify({
+        type: 'error',
+        message: 'Could not load chat history',
+      })
+    );
+  }
+}
+
+function broadcastPublicKey(username, publicKey) {
+  wss.clients.forEach((client) => {
+    if (client.readyState === client.OPEN && client.username !== username) {
+      client.send(
+        JSON.stringify({
+          type: 'public_key',
+          username,
+          publicKey,
+        })
+      );
+    }
+  });
+}
+
+// Start the server
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
-server.on('request', (req, res)=> {
-  if (req.url ==='/') {
-    res.writeHead(200)
-    res.end('Websocket server is running')
+// Cleanup failed login attempts periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [username, attempts] of failedLoginAttempts.entries()) {
+    if (now - attempts.lastAttempt > LOCKOUT_DURATION) {
+      failedLoginAttempts.delete(username);
+    }
   }
-})
-server.on('error', (error)=> {
-  console.error('Server error:', error)
-})
-
-//Error handling 
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error)
-})
-process.on('unhandledRejection', (error) => {
-  console.error('Unhandled Rejection:', error)
-})
+}, 60 * 1000); // Every minute

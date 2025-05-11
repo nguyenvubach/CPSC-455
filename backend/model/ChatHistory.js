@@ -1,11 +1,15 @@
 import mongoose from 'mongoose';
 
+const ChatHistorySchema = new mongoose.Schema({
+  chatroomName: { type: String, required: true, index: true },
+  from: { type: String, required: true },
+  message: { type: String },
+  encryptedMessage: { type: Array },
+  iv: { type: Array },
+  encryptedAesKey: { type: Array },
+  file: { type: Buffer },
+  mimeType: { type: String },
+  timestamp: { type: Date, default: Date.now },
+});
 
-const ChatHistorySchema = new mongoose.Schema(
-  {
-    username: { type: String, required: true, unique: true },
-  },
-  { timestamps: true }
-);
-
-export default mongoose.model('User', ChatHistorySchema);
+export default mongoose.model('ChatHiistory', ChatHistorySchema);
