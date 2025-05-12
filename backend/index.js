@@ -8,8 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import User from './model/User.js';
 import ChatHistory from './model/ChatHistory.js';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { storage } from './firebaseConfig.js';
+import { GridFSBucket, ObjectId } from 'mongodb';
 
 dotenv.config();
 
@@ -52,9 +51,21 @@ const RATE_LIMIT = 5; // Max messages per second
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
 
 // Connect to MongoDB
+let gfsBucket;
 mongoose
-  .connect(process.env.dbURI, {})
-  .then(() => console.log('Connected to MongoDB'))
+  .connect(process.env.dbURI, {
+    maxPoolSize: 20,
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+    timeoutMS: 10000,
+  })
+  .then((conn) => {
+    console.log('Connected to MongoDB');
+    // Create GridFS bucket
+    gfsBucket = new GridFSBucket(conn.connection.db, {
+      bucketName: 'encrypted_files',
+    });
+  })
   .catch((err) => console.error('MongoDB connection error:', err));
 
 // Helper Functions
@@ -80,24 +91,24 @@ function broadcastActiveUsers() {
   });
 }
 
-function logChatToFile(chatroomName, messages) {
-  const logDir = path.join(__dirname, 'chat_logs');
-  if (!existsSync(logDir)) mkdirSync(logDir);
+// function logChatToFile(chatroomName, messages) {
+//   const logDir = path.join(__dirname, 'chat_logs');
+//   if (!existsSync(logDir)) mkdirSync(logDir);
 
-  const logFile = path.join(logDir, `${chatroomName}_${Date.now()}.txt`);
-  console.log(messages);
-  const logContent = messages
-    .map(
-      (msg) =>
-        `${msg.from}: ${
-          msg.message ? '[encrypted text]' : '[encrypted file]'
-        } (${new Date(msg.timestamp).toISOString()})`
-    )
-    .join('\n');
+//   const logFile = path.join(logDir, `${chatroomName}_${Date.now()}.txt`);
+//   console.log(messages);
+//   const logContent = messages
+//     .map(
+//       (msg) =>
+//         `${msg.from}: ${
+//           msg.message ? '[encrypted text]' : '[encrypted file]'
+//         } (${new Date(msg.timestamp).toISOString()})`
+//     )
+//     .join('\n');
 
-  writeFileSync(logFile, logContent);
-  console.log(`Chat logged to ${logFile}`);
-}
+//   writeFileSync(logFile, logContent);
+//   console.log(`Chat logged to ${logFile}`);
+// }
 
 // Authentication Functions
 async function authenticate(username, password) {
@@ -227,6 +238,9 @@ wss.on('connection', (ws, req) => {
           break;
         case 'file':
           await handleEncryptedFile(ws, data);
+          break;
+        case 'get_file':
+          handleGetFile(ws, data);
           break;
         case 'switch_chat':
           handleSwitchChat(ws, data);
@@ -454,76 +468,112 @@ async function handleEncryptedMessage(ws, data) {
 
 async function handleEncryptedFile(ws, data) {
   if (!ws.username || !connectedClients.has(ws.username)) {
-    ws.send(
-      JSON.stringify({
-        type: 'error',
-        message: 'Not authenticated',
-      })
-    );
+    ws.send(JSON.stringify({ type: 'error', message: 'Not authenticated' }));
     return;
   }
 
   try {
-    // Create a reference to the storage location
-    // const fileRef = ref(
-    //   storage,
-    //   `encrypted_files/${Date.now()}_${ws.username}_${data.recipient}`
-    // );
+    // Convert encrypted data to Buffer
+    const fileBuffer = Buffer.from(data.encryptedFile);
 
-    // // Convert the encrypted file data back to Uint8Array
-    // const encryptedFileData = new Uint8Array(data.encryptedFile);
-     const fileRef = ref(storage, data.fileRef);
-    const encryptedFileData = await getBytes(fileRef);
-
-    // Upload the encrypted file to Firebase
-    const snapshot = await uploadBytes(fileRef, encryptedFileData, {
-      contentType: data.mimeType,
-      customMetadata: {
-        sender: ws.username,
-        recipient: data.recipient,
-        iv: JSON.stringify(data.iv),
-        encryptedAesKey: JSON.stringify(data.encryptedAesKey),
-        mimeType: data.mimeType,
-      },
-    });
-
-    // Get the download URL
-    const downloadURL = await getDownloadURL(snapshot.ref);
-
-    // Forward the file reference to recipient
-    const recipientWs = connectedClients.get(data.recipient);
-    if (recipientWs) {
-      recipientWs.send(
-        JSON.stringify({
-          type: 'file_reference',
-          from: ws.username,
-          fileRef: downloadURL,
+    // Create a new file in GridFS
+    const uploadStream = gfsBucket.openUploadStream(
+      `${Date.now()}_${data.fileName}`,
+      {
+        metadata: {
+          sender: ws.username,
+          recipient: data.recipient,
           iv: data.iv,
           encryptedAesKey: data.encryptedAesKey,
           mimeType: data.mimeType,
+          fileName: data.fileName,
+        },
+      }
+    );
+
+    uploadStream.end(fileBuffer);
+
+    uploadStream.on('finish', async () => {
+      // Add to chat history immediately
+      const chatroomName = getChatroomName(ws.username, data.recipient);
+      const newMessage = new ChatHistory({
+        chatroomName,
+        from: ws.username,
+        message: '[encrypted file]',
+        fileId: uploadStream.id,
+        iv: data.iv,
+        encryptedAesKey: data.encryptedAesKey,
+        mimeType: data.mimeType,
+        fileName: data.fileName,
+        timestamp: new Date(),
+      });
+      await newMessage.save();
+
+      // Send to recipient
+      const recipientWs = connectedClients.get(data.recipient);
+      if (recipientWs) {
+        recipientWs.send(
+          JSON.stringify({
+            type: 'file',
+            from: ws.username,
+            fileId: uploadStream.id.toString(),
+            iv: data.iv,
+            encryptedAesKey: data.encryptedAesKey,
+            mimeType: data.mimeType,
+            fileName: data.fileName,
+          })
+        );
+      }
+
+      // Send confirmation to sender
+      ws.send(
+        JSON.stringify({
+          type: 'file_ack',
+          fileId: uploadStream.id.toString(),
+          fileName: data.fileName,
         })
       );
-    }
-
-    // Store in chat history
-    const chatroomName = getChatroomName(ws.username, data.recipient);
-    const newMessage = new ChatHistory({
-      chatroomName,
-      from: ws.username,
-      message: '[encrypted file]',
-      fileRef: downloadURL,
-      iv: data.iv,
-      encryptedAesKey: data.encryptedAesKey,
-      mimeType: data.mimeType,
-      timestamp: new Date(),
     });
-    await newMessage.save();
   } catch (error) {
     console.error('Error handling encrypted file:', error);
     ws.send(
+      JSON.stringify({ type: 'error', message: 'Failed to process file' })
+    );
+  }
+}
+async function handleGetFile(ws, data) {
+  try {
+    const fileId = new ObjectId(data.fileId);
+    const fileDoc = await gfsBucket.find({ _id: fileId }).next();
+
+    if (!fileDoc) {
+      throw new Error('File not found');
+    }
+
+    const chunks = [];
+    const downloadStream = gfsBucket.openDownloadStream(fileId);
+
+    downloadStream.on('data', (chunk) => chunks.push(chunk));
+    downloadStream.on('end', () => {
+      const fileBuffer = Buffer.concat(chunks);
+      ws.send(
+        JSON.stringify({
+          type: 'file_data',
+          fileId: data.fileId,
+          from: fileDoc.metadata.sender,
+          encryptedFile: Array.from(fileBuffer),
+          iv: fileDoc.metadata.iv,
+          encryptedAesKey: fileDoc.metadata.encryptedAesKey,
+          mimeType: fileDoc.metadata.mimeType,
+        })
+      );
+    });
+  } catch (error) {
+    console.error('Error retrieving file:', error);
+    ws.send(
       JSON.stringify({
         type: 'error',
-        message: 'Failed to process file',
+        message: 'Could not retrieve file',
       })
     );
   }
@@ -531,12 +581,7 @@ async function handleEncryptedFile(ws, data) {
 
 async function handleSwitchChat(ws, data) {
   if (!ws.username || !connectedClients.has(ws.username)) {
-    ws.send(
-      JSON.stringify({
-        type: 'error',
-        message: 'Not authenticated',
-      })
-    );
+    ws.send(JSON.stringify({ type: 'error', message: 'Not authenticated' }));
     return;
   }
 
@@ -557,10 +602,7 @@ async function handleSwitchChat(ws, data) {
   } catch (error) {
     console.error('Error retrieving chat history:', error);
     ws.send(
-      JSON.stringify({
-        type: 'error',
-        message: 'Could not load chat history',
-      })
+      JSON.stringify({ type: 'error', message: 'Could not load chat history' })
     );
   }
 }
@@ -582,6 +624,30 @@ function broadcastPublicKey(username, publicKey) {
 // Start the server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+});
+server.on('request', async (req, res) => {
+  if (req.url.startsWith('/api/files/') && req.method === 'GET') {
+    try {
+      const fileId = new ObjectId(req.url.split('/').pop());
+      const fileDoc = await gfsBucket.find({ _id: fileId }).next();
+
+      if (!fileDoc) {
+        return res.status(404).send('File not found');
+      }
+
+      res.setHeader('Content-Type', fileDoc.metadata.mimeType);
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename="${fileDoc.metadata.fileName}"`
+      );
+
+      const downloadStream = gfsBucket.openDownloadStream(fileId);
+      downloadStream.pipe(res);
+    } catch (error) {
+      console.error('File retrieval error:', error);
+      res.status(500).send('Error retrieving file');
+    }
+  }
 });
 
 // Cleanup failed login attempts periodically

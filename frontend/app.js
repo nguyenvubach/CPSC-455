@@ -1,11 +1,3 @@
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.6.0/firebase-app.js';
-import {
-  getStorage,
-  ref,
-  getBytes,
-  uploadBytes,
-} from 'https://www.gstatic.com/firebasejs/9.6.0/firebase-storage.js';
-
 // DOM Elements
 const authSection = document.getElementById('auth-section');
 const chatroomSection = document.getElementById('chat-section');
@@ -37,22 +29,12 @@ const userStatus = new Map(); // Map<username, 'online'|'offline'>
 const typingStatus = new Map(); // Map<username, boolean> for typing status
 
 
-const firebaseConfig = {
-  apiKey: "AIzaSyCKfp30PMbemvyLm1kMmRLnDxlCGISwm9o",
-  authDomain: "chatinsocket-cc16a.firebaseapp.com",
-  projectId: "chatinsocket-cc16a",
-  storageBucket: "chatinsocket-cc16a.firebasestorage.appspot.com",
-  messagingSenderId: "770119566814",
-  appId: "1:770119566814:web:d1600fbe4e9e1d50bbc94f",
-  measurementId: "G-68RL5FE4EV"
-};
-// Initialize Firebase
-const firebaseApp = initializeApp(firebaseConfig);
-const storage = getStorage(firebaseApp);
+
 
 // Initialize WebSocket connection
 function initializeWebSocket() {
   socket = new WebSocket('https://chatinsocket-j5kr.onrender.com'); // Replace with your backend URL
+  //socket = new WebSocket('http://localhost:5000'); // Replace with your backend URL
 
   socket.onopen = () => {
     console.log('WebSocket connection established');
@@ -486,7 +468,7 @@ async function handleFileReference(data) {
   try {
     // Get the file reference from Firebase
     const fileRef = ref(storage, data.fileRef);
-    const encryptedFileData = await getBytes(fileRef);
+    const encryptedFileData =data.encryptedFileData
 
     // Decrypt the file
     const decryptedFile = await decryptFile(
@@ -682,32 +664,12 @@ fileInput.addEventListener('change', async (event) => {
     // 1. Encrypt the file
     const encrypted = await encryptFile(file, currentRecipient);
 
-    // 2. Create storage reference
-    const storageRef = ref(storage, `encrypted_files/${currentUser}_${currentRecipient}_${Date.now()}_${file.name}`);
-
-    // 3. Convert encrypted data to Uint8Array
-    const fileData = new Uint8Array(encrypted.encryptedFile);
-
-    // 4. Upload the file
-    const snapshot = await uploadBytes(storageRef, fileData, {
-      contentType: file.type,
-      customMetadata: {
-        sender: currentUser,
-        recipient: currentRecipient,
-        iv: JSON.stringify(encrypted.iv),
-        encryptedAesKey: JSON.stringify(encrypted.encryptedAesKey)
-      }
-    });
-
-    // 5. Get download URL
-    const downloadURL = await getDownloadURL(snapshot.ref);
-
     // 6. Send reference to recipient
     socket.send(JSON.stringify({
       type: 'file_reference',
       username: currentUser,
       recipient: currentRecipient,
-      fileRef: downloadURL,
+      fileRef: encrypted.encryptedFile,
       iv: encrypted.iv,
       encryptedAesKey: encrypted.encryptedAesKey,
       mimeType: file.type,
