@@ -36,6 +36,8 @@ function initializeWebSocket() {
   socket = new WebSocket('https://chatinsocket-j5kr.onrender.com'); // Replace with your backend URL
  // socket = new WebSocket('http://localhost:5000'); // Replace with your backend URL
 
+
+
   socket.onopen = () => {
     console.log('WebSocket connection established');
   };

@@ -42,13 +42,15 @@ A real-time chat application that allows multiple users to communicate instantly
 Hit the link below:  
 [https://chatinsocket.netlify.app/]
 
----
+- create an account
+- login
+- select a user to send message
+- for formatting: highlight messages and click the format button
 
 ## Technologies Used
 
 - **Backend:** Render
 - **Frontend:** Netlify
-- **Firebase:** File upload
 - **MongoDB:** Users, chat backlog
 - **Languages & Tools:**
   - JavaScript (JS)
