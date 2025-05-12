@@ -34,7 +34,7 @@ const typingStatus = new Map(); // Map<username, boolean> for typing status
 // Initialize WebSocket connection
 function initializeWebSocket() {
   socket = new WebSocket('https://chatinsocket-j5kr.onrender.com'); // Replace with your backend URL
- // socket = new WebSocket('http://localhost:5000'); // Replace with your backend URL
+ //socket = new WebSocket('http://localhost:5000'); // Replace with your backend URL
 
 
 
@@ -179,27 +179,30 @@ async function loadKeys(username) {
 // Encrypt message with recipient's public key
 async function encryptMessage(message, recipientUsername) {
   try {
-    // Get recipient's public key
     const recipientPublicKey = publicKeys.get(recipientUsername);
     if (!recipientPublicKey) throw new Error('Recipient public key not found');
 
-    // Generate a random AES key for this message
+    // Generate AES key
     const aesKey = await window.crypto.subtle.generateKey(
       { name: 'AES-CBC', length: 256 },
       true,
       ['encrypt', 'decrypt']
     );
 
-    // Encrypt message with AES
+    // Generate IV
     const iv = window.crypto.getRandomValues(new Uint8Array(16));
+
+    // Encrypt message with AES
     const encryptedMessage = await window.crypto.subtle.encrypt(
       { name: 'AES-CBC', iv },
       aesKey,
       new TextEncoder().encode(message)
     );
 
-    // Export and encrypt the AES key with RSA
+    // Export AES key
     const exportedAesKey = await window.crypto.subtle.exportKey('raw', aesKey);
+
+    // Encrypt AES key with RSA
     const encryptedAesKey = await window.crypto.subtle.encrypt(
       { name: 'RSA-OAEP' },
       recipientPublicKey,
@@ -207,9 +210,9 @@ async function encryptMessage(message, recipientUsername) {
     );
 
     return {
-      iv: Array.from(iv),
-      encryptedMessage: Array.from(new Uint8Array(encryptedMessage)),
-      encryptedAesKey: Array.from(new Uint8Array(encryptedAesKey)),
+      iv: Array.from(iv), // Convert to regular array
+      encryptedMessage: Array.from(new Uint8Array(encryptedMessage)), // Convert to regular array
+      encryptedAesKey: Array.from(new Uint8Array(encryptedAesKey)), // Convert to regular array
     };
   } catch (error) {
     console.error('Encryption error:', error);
@@ -220,11 +223,16 @@ async function encryptMessage(message, recipientUsername) {
 // Decrypt message with our private key
 async function decryptMessage(encryptedData, iv, encryptedAesKey) {
   try {
+    // Convert arrays back to Uint8Array if needed
+    const encryptedAesKeyBuf = new Uint8Array(encryptedAesKey).buffer;
+    const ivBuf = new Uint8Array(iv);
+    const encryptedDataBuf = new Uint8Array(encryptedData).buffer;
+
     // Decrypt the AES key with our private key
     const decryptedAesKey = await window.crypto.subtle.decrypt(
       { name: 'RSA-OAEP' },
       userKeyPair.privateKey,
-      new Uint8Array(encryptedAesKey)
+      encryptedAesKeyBuf
     );
 
     // Import the AES key
@@ -238,9 +246,9 @@ async function decryptMessage(encryptedData, iv, encryptedAesKey) {
 
     // Decrypt the message
     const decrypted = await window.crypto.subtle.decrypt(
-      { name: 'AES-CBC', iv: new Uint8Array(iv) },
+      { name: 'AES-CBC', iv: ivBuf },
       aesKey,
-      new Uint8Array(encryptedData)
+      encryptedDataBuf
     );
 
     return new TextDecoder().decode(decrypted);
@@ -626,34 +634,31 @@ sendBtn.addEventListener('click', async () => {
     // Encrypt the message
     const encrypted = await encryptMessage(message, currentRecipient);
 
-    // Add to local chat history
+    // Add to local chat history (store plaintext for sender)
     const chatroomName = getChatroomName(currentUser, currentRecipient);
     const history = chatHistory.get(chatroomName) || [];
     history.push({
       from: currentUser,
       message: message, // Plaintext for sender
-      encryptedMessage: encrypted.encryptedMessage,
-      iv: encrypted.iv,
-      encryptedAesKey: encrypted.encryptedAesKey,
     });
     chatHistory.set(chatroomName, history);
     displayMessages(history);
 
-    // Send encrypted message (including plaintext for sender's history)
+    // Send encrypted message to server
     socket.send(
       JSON.stringify({
         type: 'message',
-        username: currentUser,
         recipient: currentRecipient,
-        message: message, // Include plaintext for sender's history
-        ...encrypted,
+        encryptedMessage: encrypted.encryptedMessage,
+        iv: encrypted.iv,
+        encryptedAesKey: encrypted.encryptedAesKey,
       })
     );
 
     messageBox.value = '';
   } catch (error) {
     console.error('Error sending message:', error);
-    alert('Failed to send message');
+    alert('Failed to send message: ' + error.message);
   }
 });
 
